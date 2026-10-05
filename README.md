@@ -1,147 +1,157 @@
-# ICS322 Sentiment analysis of stock based on news 
+# 📈 TickerPulse — Stock News Sentiment Intelligence
 
-Project for ICS322
+An MLOps pipeline that scrapes financial news, labels it, retrains a BERT classifier every week, and serves live sentiment for any stock through a web dashboard.
 
-Please go through the Project Description Pdf to know more about model architecture.
+🔗 **Live app:** https://frontend-iazu.onrender.com/
+🤗 **Model:** https://huggingface.co/dhanushbitra/bert_sentiment_trainer
 
-Access to UI: https://frontend-iazu.onrender.com/
+![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)
+![HuggingFace](https://img.shields.io/badge/HuggingFace-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black)
+![Hopsworks](https://img.shields.io/badge/Hopsworks-1EB182?style=for-the-badge&logoColor=white)
+![Modal](https://img.shields.io/badge/Modal-7FEE64?style=for-the-badge&logoColor=black)
+![Optuna](https://img.shields.io/badge/Optuna-2C7BB6?style=for-the-badge&logoColor=white)
+![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)
+![Node.js](https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)
 
-Developers: Dhanush & Nived
+---
 
+## 🧠 What it does
 
-# Project description
+- Fine-tunes `bert-base-cased` for 3-class financial sentiment (negative / positive / neutral)
+- Scrapes Yahoo News every week for fresh headlines and auto-labels them
+- Stores features in a Hopsworks feature store and grows the dataset over time
+- Retrains on Modal (A10G GPU) and **only publishes the new model if it beats the current one**
+- Lets users search any ticker or company and see a 7-day sentiment breakdown
 
-This project is a sentiment analysis model for financial news headlines. The model is fine-tuned on the base data [Financial Phrasebank](https://huggingface.co/datasets/financial_phrasebank) dataset and [Zeroshot Twitter](https://huggingface.co/datasets/zeroshot/twitter-financial-news-sentiment). Every week, new features are collected by scraping Yahoo News and getting the sentiment of new news articles. The base model is then fine-tuned again but with the incremented dataset and if the newly fine-tuned model performs better than the prior version, this one is deployed. The model is then used by an app that we built that allows users to enter a search key and a maximum number of articles to analyze. The app then makes a request to the API to fetch the articles related to the search term from the past 7 days. The script in the API that does the scraping is a JavaScript version of the Python script that is used to collect new features every week. Our API is deployed using Google Cloud. The frontend app is deployed using Firebase and can be found on [News Sentiment Analyzer](https://frontend-iazu.onrender.com/). The model is deployed to [Huggingface.co](https://huggingface.co/dhanushbitra/bert_sentiment_trainer)
+## 📊 Results
 
+| Metric | Value |
+|--------|-------|
+| Accuracy | **89.47%** |
+| Loss | 0.5985 |
+| Base model | `bert-base-cased` |
+| Classes | Negative (0), Positive (1), Neutral (2) |
 
-# Base dataset description:
+Hyperparameters came from an Optuna search (10 trials, about 6 hours on a Colab T4).
 
-Our base dataset was based on two datasets. The first is [Financial Phrasebank](https://huggingface.co/datasets/financial_phrasebank) and the second is [Zeroshot Twitter](https://huggingface.co/datasets/zeroshot/twitter-financial-news-sentiment).
-Both datasets essentially include a text as well as a sentiment label. For FinancialPhraseBank it is negative, neutral, and positive, and for Zeroshot bearish, bullish, and neutral.
-The financial phrase bank dataset contains 4 subsets created based on how the annotators agreed on the labeling: 50%, 66%, 75%, and 100%. We used the one with 75% agreeance to maximize the size of our final dataset. Preprocessing was required to adapt between the different labeling used by the datasets so they could be combined. Ultimately the labels used by us were negative, positive, and neutral (mapped to 0, 1, and 2 in the feature store on Hopsworks).
+## 🏗️ Architecture
 
-# Base model description:
-
-https://huggingface.co/bert-base-cased
-The BERT (Bidirectional Encoder Representations from Transformers) model is a transformers model that has been pre-trained on a large dataset of English data in a self-supervised fashion. It is a base model that has been pre-trained on the raw texts only, with no humans labeling them in any way. The model is case-sensitive. The model was pre-trained with two objectives: masked language modeling (MLM) and next sentence prediction (NSP). The MLM objective involves masking 15% of the words in the input sentence and predicting the masked words. The NSP objective involves concatenating two masked sentences as inputs during pre-training and predicting if the two sentences were following each other or not. The BERT model can be fine-tuned on a downstream task such as sequence classification, token classification, or question answering. The model is primarily aimed at being fine-tuned on tasks that use the whole sentence (potentially masked) to make decisions.
-This model was first introduced in this paper https://arxiv.org/pdf/1810.04805.pdf
-
-# Project files and folders:
-
-## sentiment_analysis_backend
-
-This folder contains all the necessary files for the API used by the app. This includes the javascript version of yahoo_finance_news_scraper. The backend is written using the conventions of NodeJs. This API has one endpoint that is used by the front end to get the sentiment of a specific stock. The endpoint is called /sentiment-analysis and takes queries as input. The queries are `searchKey` and `maxArticlesPerSearch`. The `searchKey` is the search term that is used to find the headlines that are related to the stock. The `maxArticlesPerSearch` is the maximum number of headlines that are used to analyze the sentiment of the search term. The endpoint returns a JSON object with the following structure:
-
-```json
-{
-    "result": [
-        {
-            "headline": "string",
-            "posted": "Date | null",
-            "text": "string",
-            "href": "string",
-        },
-    ]
-}
+```
+Yahoo News (AAPL, AMZN, GOOGL, MSFT, TSLA)
+        ↓
+Scraper → distilRoBERTa labels each headline
+        ↓
+Text encoded with ada-002 tokenizer
+        ↓
+Balanced + stratified 80/20 split
+        ↓
+Hopsworks Feature Store (train / test feature groups)
+        ↓
+Modal weekly cron (Mon 06:00 UTC) → fine-tune BERT
+        ↓
+New accuracy > old accuracy?  →  push to Hugging Face
+        ↓
+React frontend ← Node API (live scraping) + HF Inference API
 ```
 
-## sentiment_analysis_frontend
+## 🗂️ Datasets
 
-All the files necessary for the front end and using the endpoint from the API as well as the inference API for the model on Huggingface. The front end is written in React, a popular JavaScript library for building user interfaces. It's responsible for displaying data to users and handling user interactions.
+| Dataset | Labels | Notes |
+|---------|--------|-------|
+| [Financial PhraseBank](https://huggingface.co/datasets/financial_phrasebank) | negative / neutral / positive | 75% annotator agreement subset |
+| [Zeroshot Twitter Financial News](https://huggingface.co/datasets/zeroshot/twitter-financial-news-sentiment) | bearish / bullish / neutral | Remapped to the same 3 labels |
 
-## deploy_weekly_training.sh
+Weekly scraped headlines are added on top: 5 tickers, up to 50 headlines each, past 7 days, class-balanced before upload.
 
-This is a shell script used for running a script on Modal for retraining the model weekly after new features have been collected. Using modal allows us to automate the process of triggering the training pipeline, ensuring that the model is regularly updated with fresh data.
+## 📁 Project Structure
 
-## feature_pipeline_weekly.py
+| Path | Purpose |
+|------|---------|
+| `preprocessing_pipeline.ipynb` | Preprocess base data, test the tokenizer encode/decode round trip |
+| `data_mod.py` | Convert raw Financial PhraseBank text into CSV |
+| `feature_pipeline.ipynb` | One-time upload of base data, creates train/test feature groups |
+| `feature_pipeline_weekly.py` | Weekly scrape → label → encode → upload to Hopsworks |
+| `yahoo_finance_news_scraper.py` | Scraper + labeling + encoding (use Python 3.8 or 3.9) |
+| `hyperparameter_search.ipynb` | Optuna search via Hugging Face `Trainer` |
+| `training_pipeline_notebook.ipynb` | First training run and model upload |
+| `training_pipeline.py` | Weekly retraining on Modal with accuracy gate |
+| `deploy_weekly_training.sh` | Deploys the training job to Modal |
+| `sentiment_analysis_backend/` | Node.js API (JS port of the scraper) |
+| `sentiment_analysis_frontend/` | React dashboard |
 
-This is the pipeline script that collects new features weekly by using the `yahoo_finance_news_scraper.py` module. The scraper collects 50 headlines from the past 7 days each of the search keys `AAPL`, `AMZN`, `GOOGL`, `MSFT`, `TSLA`. We then get their sentiment using the model [distilRoberta-financial-sentiment](https://huggingface.co/mrm8488/distilroberta-finetuned-financial-news-sentiment-analysis). In order for us to upload these feaures to Hopsworks we embedd the text for each feature using OpenAI's text embedder model [text-embedding-ada-002](https://huggingface.co/Xenova/text-embedding-ada-002). Once the new features are collected they are split into training and test sets and uploaded to the respective training and test feature groups on Hopsworks. This ensures that the model has a steady stream of new data to learn from.
-
-## feature_pipeline.ipynb
-
-This is the notebook used to upload the initial features from the base dataset. The code is very similar to the weekly feature pipeline script but does not collect features using the scraping script. It is also here that we created the train and test feature groups on Hopsworks. This pipeline was only run once to create and initialize the feature groups.
-
-## hyperparameter_search.ipynb
-
-This is a notebook we used to make a hyperparameter search to find the optimal combination of hyperparameters for when we train the model. The optimal hyperparameter search was found using Optuna as the background to the hyperparameter_search method of the Trainer class from Huggingface. The optimal training arguments which we also end up using are the following:
+## ⚙️ Training Config
 
 ```python
-training_args = TrainingArguments(
-    output_dir="bert_sentiment_trainer", 
-    evaluation_strategy="steps",
+TrainingArguments(
     per_device_train_batch_size=16,
-    per_device_eval_batch_size=4,
-    num_train_epochs=8,
-    learning_rate= 2.754984679344267e-05,
-    save_total_limit=3,
-    seed=42,
-    lr_scheduler_type='constant_with_warmup',
+    learning_rate=2.754984679344267e-05,
+    lr_scheduler_type="constant_with_warmup",
     warmup_steps=50,
     max_steps=3000,
-    save_strategy="steps",
-    save_steps=250,
-    fp16=False,
     eval_steps=250,
-    logging_steps=25,
-    report_to=["tensorboard"],
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
-    greater_is_better=True,
+    seed=42,
 )
 ```
 
-## preprocessing_pipeline.ipynb
+## 🚀 Setup
 
-This notebook was used to preprocess the base data and collect them into csv files (for later use in feature_pipeline.ipynb) as well as figure out and test the text embedding tokenizer to see that it works as intended.
-
-## requirements.txt
-
-The requirements.txt file contains the modules needed to run the Python script.
-
-## training_pipeline.py
-
-This script is run when running the shell script deploy_weekly_training.sh. It collects the training and test features from Hopsworks and runs the finetuning of the bert_base_cased model from Huggingface using the optimal hyperparameters found in the previously mentioned hyperparameter Python notebook. If the fine-tuned model (using the newly incremented data) performs better than the previous version the new model is uploaded to huggingface. This script is the main driver of the model training process.
-
-## training_pipeline_notebook.ipynb
-
-This notebook is similar to the training_pipeline.py script but is in a Python notebook format. In this notebook, we fine-tuned and uploaded the first version of our model to Huggingface.
-
-## yahoo_finance_news_scraper.py
-
-This module contains the functions necessary to do the scraping on Yahoo News to find the headlines that are related to a specific search term. The script ran into errors when using Python versions higher than 3.10, so we recommend using version 3.9 or 3.8.
-
-# How to run the pipelines
-
-## Run the backend locally
-
-You will need to install node (we used version 18). To run the backend locally on your computer you need to uncomment one line and comment out another. The file is on the file path sentiment_analysis_backend\app.js. Uncomment line 15 and comment out line 14. This is needed so that the requests from the front end are allowed. Change the directory to the sentiment_analysis_backend folder, and run the command
-
-```bash
-npm install
-npm run dev
-```
-
-## Run the frontend locally
-
-You vill need to install node (we used version 18). You also have to create a file in the sentiment_analysis_frontend folder called credentials.json that contains the following:
-
-```json
-{
-    "huggingface": "<your huggingface API key>"
-}
-```
-
-To run the frontend locally on your computer you need to uncomment one line and comment out another. The file is on the file path sentiment_analysis_frontend\src\pages\Index.jsx. Uncomment line 130 and comment out line 129. This is needed to be able to use the API you are running locally on your computer. Change the directory to the sentiment_analysis_frontend folder, and run the command
-
-```bash
-npm install
-npm run dev
-```
-
-## Pipelines
-
-All of the pipeline scripts/notebooks can be run by just running them. Make sure that you have the necessary python modules installed by running the command
+### Pipelines
 
 ```bash
 pip install -r requirements.txt
 ```
+
+Set your `HOPSWORKS_API_KEY`, then run the notebooks or scripts directly. To deploy weekly retraining:
+
+```bash
+modal deploy --name project_weekly_training training_pipeline.py
+```
+
+### Backend
+
+```bash
+cd sentiment_analysis_backend
+npm install
+npm run dev
+```
+
+For local use, uncomment line 15 and comment line 14 in `app.js` to allow frontend requests (CORS).
+
+Endpoint: `GET /sentiment-analysis?searchKey=TSLA&maxArticlesPerSearch=20`
+
+```json
+{
+  "result": [
+    { "headline": "string", "posted": "Date | null", "text": "string", "href": "string" }
+  ]
+}
+```
+
+### Frontend
+
+```bash
+cd sentiment_analysis_frontend
+npm install
+npm run dev
+```
+
+Create `credentials.json` in the frontend folder:
+
+```json
+{ "huggingface": "<your huggingface API key>" }
+```
+
+Then uncomment line 130 and comment line 129 in `src/pages/Index.jsx` to point at your local API.
+
+## 🔭 What's next
+
+- Correlate sentiment trends with historical price data
+- Forecast price movement from sentiment signals
+- Explore deeper models for sharper market-shift detection
+
+## 👥 Built by
+
+Dhanush Bitra, Nived Krishna, Sasi Kiran Reddy — ICS322 course project
